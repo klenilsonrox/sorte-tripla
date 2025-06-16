@@ -9,7 +9,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Coins, DollarSign, Sparkles, Trophy, Zap } from "lucide-react"
 import Image from "next/image"
-
+import { generateGameHash } from "../lib/game-security"
+import { adicionarSaldoSeguro, processarJogada } from "../actions"
 export default function SorteTripla() {
   const [saldo, setSaldo] = useState(50)
   const [personagensSorteados, setPersonagensSorteados] = useState([null, null, null])
@@ -21,10 +22,11 @@ export default function SorteTripla() {
   const [valorAdicionar, setValorAdicionar] = useState("")
   const [valorGanho, setValorGanho] = useState(0)
   const [jogando, setJogando] = useState(false)
-  const [garantirVitoria, setGarantirVitoria] = useState(false)
   const [personagensAnimacao, setPersonagensAnimacao] = useState([0, 0, 0])
+  const [gameHash, setGameHash] = useState("")
+  const [timestamp, setTimestamp] = useState(Date.now())
 
- const personagens = [
+const personagens = [
     { id: 0, nome: "Stitch", imagem: "/images/stitch.png" },
     { id: 1, nome: "Mario", imagem: "/images/mario.webp" },
     { id: 2, nome: "Yoshi", imagem: "/images/yoshi.png" },
@@ -35,70 +37,66 @@ export default function SorteTripla() {
   ]
 
 
-  const gerarPersonagemAleatorio = () => Math.floor(Math.random() * 7)
+  // Inicializar hash de segurança
+  useEffect(() => {
+    const initialTimestamp = Date.now()
+    const initialHash = generateGameHash(saldo, perdaAcumulada, initialTimestamp)
+    setGameHash(initialHash)
+    setTimestamp(initialTimestamp)
+  }, [])
 
-  const jogar = () => {
-    if (saldo < 3) {
+  const jogar = async () => {
+    if (saldo < 4) {
       setShowModalSaldoZero(true)
       return
     }
 
     setJogando(true)
-    setSaldo(saldo - 3)
     setPersonagensSorteados([null, null, null])
     setPersonagensGirando([true, true, true])
 
-    let resultadoFinal
+    try {
+      // Processar jogada no servidor
+      const resultado = await processarJogada({
+        saldo,
+        perdaAcumulada,
+        timestamp,
+        hash: gameHash,
+      })
 
-    if (garantirVitoria) {
-      // Garantir vitória - todos os personagens iguais
-      const personagemVencedor = gerarPersonagemAleatorio()
-      resultadoFinal = [personagemVencedor, personagemVencedor, personagemVencedor]
-      setGarantirVitoria(false)
-    } else {
-      // Sorteio normal
-      resultadoFinal = [gerarPersonagemAleatorio(), gerarPersonagemAleatorio(), gerarPersonagemAleatorio()]
-    }
+      // Animação dos resultados
+      setTimeout(() => {
+        setPersonagensGirando([false, true, true])
+        setPersonagensSorteados([resultado.resultado[0], null, null])
+      }, 500)
 
-    // Parar primeiro personagem após 0.5 segundo
-    setTimeout(() => {
-      setPersonagensGirando([false, true, true])
-      setPersonagensSorteados([resultadoFinal[0], null, null])
-    }, 500)
+      setTimeout(() => {
+        setPersonagensGirando([false, false, true])
+        setPersonagensSorteados([resultado.resultado[0], resultado.resultado[1], null])
+      }, 1000)
 
-    // Parar segundo personagem após 1 segundo
-    setTimeout(() => {
-      setPersonagensGirando([false, false, true])
-      setPersonagensSorteados([resultadoFinal[0], resultadoFinal[1], null])
-    }, 1000)
+      setTimeout(() => {
+        setPersonagensGirando([false, false, false])
+        setPersonagensSorteados(resultado.resultado)
 
-    // Parar terceiro personagem após 1.5 segundos
-    setTimeout(() => {
-      setPersonagensGirando([false, false, false])
-      setPersonagensSorteados(resultadoFinal)
+        // Atualizar estado com dados seguros do servidor
+        setSaldo(resultado.novoSaldo)
+        setPerdaAcumulada(resultado.novaPerdaAcumulada)
+        setGameHash(resultado.hash)
+        setTimestamp(resultado.timestamp)
 
-      // Verificar se ganhou (3 personagens iguais)
-      const ganhou = resultadoFinal[0] === resultadoFinal[1] && resultadoFinal[1] === resultadoFinal[2]
-
-      if (ganhou) {
-        const premio = Math.floor(Math.random() * 10) + 1
-        setSaldo((prev) => prev + premio)
-        setValorGanho(premio)
-        setTimeout(() => setShowModalVitoria(true), 300)
-        setPerdaAcumulada(0)
-      } else {
-        const novaPerda = perdaAcumulada + 2
-        setPerdaAcumulada(novaPerda)
-
-        // A cada 20 reais perdidos, garantir vitória na próxima
-        if (novaPerda >= 20) {
-          setGarantirVitoria(true)
-          setPerdaAcumulada(0)
+        if (resultado.ganhou) {
+          setValorGanho(resultado.premio)
+          setTimeout(() => setShowModalVitoria(true), 300)
         }
-      }
 
+        setJogando(false)
+      }, 1500)
+    } catch (error) {
+      console.error("Erro na jogada:", error)
       setJogando(false)
-    }, 1500)
+      alert("Erro detectado. Recarregue a página.")
+    }
   }
 
   // Animação dos personagens girando
@@ -123,13 +121,22 @@ export default function SorteTripla() {
     }
   }, [personagensGirando])
 
-  const adicionarSaldo = () => {
+  const adicionarSaldo = async () => {
     const valor = Number.parseFloat(valorAdicionar)
     if (valor && valor > 0) {
-      setSaldo((prev) => prev + valor)
-      setValorAdicionar("")
-      setShowModalSaldo(false)
-      setShowModalSaldoZero(false)
+      try {
+        const resultado = await adicionarSaldoSeguro(saldo, valor, timestamp, gameHash)
+
+        setSaldo(resultado.novoSaldo)
+        setGameHash(resultado.hash)
+        setTimestamp(resultado.timestamp)
+        setValorAdicionar("")
+        setShowModalSaldo(false)
+        setShowModalSaldoZero(false)
+      } catch (error) {
+        console.error("Erro ao adicionar saldo:", error)
+        alert("Erro detectado. Recarregue a página.")
+      }
     }
   }
 
@@ -270,7 +277,7 @@ export default function SorteTripla() {
               <div className="space-y-4">
                 <Button
                   onClick={jogar}
-                  disabled={jogando || saldo < 2}
+                  disabled={jogando || saldo < 4}
                   className="w-full bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700 text-white font-bold py-4 text-2xl shadow-lg"
                 >
                   {jogando ? (
@@ -285,7 +292,7 @@ export default function SorteTripla() {
                   ) : (
                     <>
                       <Sparkles className="w-6 h-6 mr-3" />
-                      JOGAR (R$ 3,00)
+                      JOGAR (R$ 4,00)
                     </>
                   )}
                 </Button>
@@ -299,8 +306,6 @@ export default function SorteTripla() {
                   Limpar Resultado
                 </Button>
               </div>
-
-              {/* Indicador de Sorte */}
             </CardContent>
           </Card>
         </motion.div>
@@ -339,7 +344,7 @@ export default function SorteTripla() {
               <DialogTitle className="text-center text-2xl">💸 Saldo Insuficiente!</DialogTitle>
             </DialogHeader>
             <div className="text-center py-4">
-              <p className="mb-4">Você precisa de pelo menos R$ 2,00 para jogar.</p>
+              <p className="mb-4">Você precisa de pelo menos R$ 4,00 para jogar.</p>
               <Button onClick={() => setShowModalSaldo(true)} className="bg-white text-red-600 hover:bg-gray-100">
                 Adicionar Saldo
               </Button>
